@@ -1,0 +1,1 @@
+"""Swale Sounds application foundation."""

@@ -1,0 +1,19 @@
+brand:
+  name: Swale Sounds
+  tagline: Music and ambience for focus, rest and quiet moments
+paths:
+  data: ./data
+database:
+  url: sqlite:///./data/swale-sounds.db
+media:
+  sample_rate: 48000
+  channels: 2
+  video:
+    width: 1920
+    height: 1080
+    fps: 30
+  audio:
+    codec: aac
+    bitrate: 192k
+  ambience:
+    gain_db: -18
