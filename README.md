@@ -20,11 +20,28 @@ and `ffprobe -version`.
 Run commands from the repository root:
 
 ```bash
-uv sync
-uv run alembic upgrade head
-uv run swale-sounds --help
-uv run swale-sounds version
+make setup
+make check
+make smoke
 ```
+
+`make setup` runs `uv sync`. `make check` verifies formatting, lint, strict mypy
+and pytest. `make smoke` runs the real CLI through a fresh isolated database,
+one-minute Session, generated music and portrait artwork, and a verified
+640×360 H.264/AAC MP4. FFmpeg and ffprobe must be on PATH; missing tools fail
+the smoke test rather than skipping it.
+
+Smoke state lives in a temporary directory, never the normal `data/` workspace.
+Success removes it; failure retains it and reports the failed step, command
+output and location, including any RenderRun logs for inspection.
+
+Run `make` or `make help` for the command list. Individual targets are
+`make format` (apply formatting), `make lint` (format/lint checks),
+`make typecheck` (strict mypy), and `make test` (pytest). `make migrate` upgrades
+the normal configured local database. `make clean` removes only the root
+pytest, mypy and Ruff caches; it preserves application data and `.venv`.
+Use `make check smoke` before merging substantial work. These targets wrap the
+existing commands; direct `uv run ...` usage remains supported.
 
 `uv sync` manages dependencies in the project-local `.venv/`. No global project
 packages or manual environment activation are required. Commit `uv.lock` so
