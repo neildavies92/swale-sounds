@@ -4,6 +4,16 @@ import pytest
 import yaml
 
 
+@pytest.fixture(autouse=True)
+def prohibit_live_image_requests(monkeypatch):
+    """Paid provider calls are never part of the normal test suite."""
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("Live OpenAI image requests are forbidden in pytest")
+
+    monkeypatch.setattr("openai.resources.images.Images.generate", unexpected)
+
+
 @pytest.fixture
 def config_data() -> dict:
     path = Path(__file__).parents[1] / "config/swale-sounds.yaml"

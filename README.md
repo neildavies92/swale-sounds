@@ -8,6 +8,9 @@ source media become continuous audio and a playable, fully tracked MP4.
 It runs on a developer workstation or directly on a conventional Linux VM.
 Artwork is static; publishing and animation are not implemented.
 
+Milestone 6 adds optional OpenAI artwork generation that feeds the same source
+Asset and rendering pipeline.
+
 ## Prerequisites and setup
 
 Install `uv`. Python 3.12+ is required; `.python-version` selects Python 3.12,
@@ -236,6 +239,73 @@ termination may leave untracked source files; inspect them before retrying.
 An import reports missing or changed tracked duplicate files instead of
 silently accepting them. Manifests can always be regenerated from database
 records, but regeneration does not repair or revalidate source media.
+
+## Artwork generation
+
+For a Session in `created` with no artwork source, inspect generation intent:
+
+```bash
+uv run swale-sounds generate artwork session-000001 --dry-run
+export OPENAI_API_KEY=...
+uv run swale-sounds generate artwork session-000001
+uv run swale-sounds asset list session-000001
+```
+
+API usage incurs provider charges. Dry-run requires no credentials, makes no
+API call, and creates no files, Assets or Session changes. The key is read only
+from `OPENAI_API_KEY`; never put it in YAML, CLI arguments or provenance.
+
+Session metadata becomes a deterministic still-image prompt: title, mood,
+purpose, environment, location, weather, time, season, visual style and optional
+animation values as still-image motifs. Empty sections are omitted. The default
+composition discourages text, logos, borders and readable signage. No additional
+text-generation call is made. The exact submitted prompt is stored as provenance,
+so prompts should not contain secrets.
+
+Use `--prompt-file ./prompt.txt` for an exact UTF-8 override (including whitespace
+and line endings), up to 32,000 characters and containing non-whitespace text.
+Use `--config /path/to/settings.yaml` to override the optional `generation.artwork`
+section. Phase 1 configurations that omit this section retain valid defaults.
+
+The default is the dated `gpt-image-2.5-flare-2026-09-08` model at `1536x864`,
+medium quality, PNG, opaque background and automatic moderation. These model and
+size settings were verified against the [official Image API reference](https://developers.openai.com/api/reference/python/resources/images/methods/generate).
+Model IDs remain configurable; provider-side model/size limits remain authoritative.
+The official Python SDK (`openai>=3.22.1,<4`) calls `client.images.generate` once
+with `n=1`, streaming disabled, a configured 180-second timeout and SDK retries
+disabled (`max_retries=0`). There is no application retry loop. After an ambiguous
+timeout, check provider usage before explicitly invoking generation again.
+
+The generated image is staged under `intermediate/generation-<uuid>/` and passed
+to the existing Asset importer. Normal ffprobe still-image validation, SHA-256,
+safe copying, manifest regeneration and readiness rules all apply. With existing
+music, the import advances the Session to `assets_ready`; without music it stays
+`created`. Existing artwork is never replaced or automatically supplemented;
+the video renderer still requires exactly one artwork source. The importer
+rechecks the created/no-artwork condition under its writer lock to protect
+against concurrent state changes during generation. Concurrent requests can
+still incur provider charges; a result that loses the import race is retained.
+
+The Asset records `provider=openai`, the exact configured model, submitted prompt,
+request parameters (size, quality, format, background, moderation and image count),
+and available response metadata (actual size/quality/format/background and revised
+prompt). The submitted prompt is never replaced by a provider revision. Raw API
+responses and base64 are not stored. Provider plan remains unset. Licence fields
+remain unset unless evidence is supplied using
+`--licence-notes`, `--licence-url` and `--licence-version`. Generation does not
+establish legal ownership or Content ID rights.
+
+Success removes staging; provider/decoding failures remove empty staging and
+create no Asset. If import or manifest creation fails after generation, the CLI
+reports the retained candidate path for manual recovery. An error stating
+`Assets committed` means the Asset exists already: regenerate its manifest using
+`swale-sounds asset manifest`, rather than making another paid request. Interrupted
+processes may leave staging for inspection. No generation table or migration is
+needed; successful provenance belongs to the Asset.
+
+`make check`, pytest and `make smoke` never make paid provider calls. Provider
+tests use fake SDK responses, while the existing smoke remains the local Phase 1
+workflow with generated test fixtures.
 
 ## Continuous audio rendering
 
