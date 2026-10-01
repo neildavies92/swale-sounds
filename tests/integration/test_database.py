@@ -48,6 +48,7 @@ def test_migration_creates_expected_schema_without_model_drift(database):
     engine, _, config = database
     assert set(inspect(engine).get_table_names()) == {
         "sessions",
+        "assets",
         "alembic_version",
     }
     with engine.connect() as connection:
