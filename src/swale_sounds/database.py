@@ -1,7 +1,10 @@
 """SQLite engines and explicit transaction-scoped ORM sessions."""
 
-from sqlalchemy import Engine, create_engine
+from sqlite3 import Connection
+
+from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
+from sqlalchemy.pool import ConnectionPoolEntry
 
 from swale_sounds.config import DatabaseConfig
 
@@ -12,7 +15,15 @@ class Base(DeclarativeBase):
 
 def create_database_engine(config: DatabaseConfig) -> Engine:
     """Create an engine; provisioning its parent directory is caller-owned."""
-    return create_engine(config.url)
+    engine = create_engine(config.url)
+
+    @event.listens_for(engine, "connect")
+    def enable_foreign_keys(
+        connection: Connection, record: ConnectionPoolEntry
+    ) -> None:
+        connection.execute("PRAGMA foreign_keys = ON")
+
+    return engine
 
 
 def create_session_factory(engine: Engine) -> sessionmaker[Session]:

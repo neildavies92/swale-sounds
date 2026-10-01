@@ -2,14 +2,18 @@
 
 from datetime import UTC, datetime
 from enum import StrEnum
+from typing import TYPE_CHECKING
 
 from pydantic import JsonValue
 from sqlalchemy import JSON, DateTime, Enum, Text
 from sqlalchemy.engine import Dialect
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import TypeDecorator
 
 from swale_sounds.database import Base
+
+if TYPE_CHECKING:
+    from swale_sounds.models.asset import Asset
 
 
 class SessionStatus(StrEnum):
@@ -49,6 +53,9 @@ class Session(Base):
     __tablename__ = "sessions"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    assets: Mapped[list["Asset"]] = relationship(
+        back_populates="session", passive_deletes="all"
+    )
     public_id: Mapped[str] = mapped_column(Text, unique=True)
     title: Mapped[str] = mapped_column(Text)
     status: Mapped[SessionStatus] = mapped_column(
