@@ -14,6 +14,7 @@ from swale_sounds.database import Base
 
 if TYPE_CHECKING:
     from swale_sounds.models.asset import Asset
+    from swale_sounds.models.render_run import RenderRun
 
 
 class SessionStatus(StrEnum):
@@ -54,6 +55,9 @@ class Session(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     assets: Mapped[list["Asset"]] = relationship(
+        back_populates="session", passive_deletes="all"
+    )
+    render_runs: Mapped[list["RenderRun"]] = relationship(
         back_populates="session", passive_deletes="all"
     )
     public_id: Mapped[str] = mapped_column(Text, unique=True)

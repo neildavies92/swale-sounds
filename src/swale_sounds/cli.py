@@ -5,11 +5,13 @@ from importlib.metadata import version as package_version
 import typer
 
 from swale_sounds.assets.cli import app as asset_app
+from swale_sounds.rendering.cli import app as render_app
 from swale_sounds.sessions.cli import app as session_app
 
 app = typer.Typer(no_args_is_help=True)
 app.add_typer(session_app, name="session")
 app.add_typer(asset_app, name="asset")
+app.add_typer(render_app, name="render")
 
 
 @app.callback()

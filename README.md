@@ -3,19 +3,19 @@
 A local-first application intended to evolve into an automated, data-driven
 long-form music and ambience production system.
 
-Milestone 3 adds source-media import, media inspection, provenance records,
-and recoverable asset manifests to the validated session workflow.
+Milestone 4 adds continuous audio rendering with persisted render provenance,
+integrity-checked reuse, and optional ambience to the validated session workflow.
 It runs on a developer workstation or directly on a conventional Linux VM.
-Media production is not implemented.
+Video production is not implemented.
 
 ## Prerequisites and setup
 
 Install `uv`. Python 3.12+ is required; `.python-version` selects Python 3.12,
 which uv downloads automatically if it is unavailable. Install FFmpeg on the
-host and ensure `ffprobe` is on `PATH` (for example, `brew install ffmpeg` on
+host and ensure `ffmpeg` and `ffprobe` are on `PATH` (for example, `brew install ffmpeg` on
 macOS or your Linux distribution's FFmpeg package). This is an external
-executable requirement, not a Python dependency. Verify with `ffprobe -version`.
-It is used only for inspection; the application does not render media yet.
+executable requirement, not a Python dependency. Verify with `ffmpeg -version`
+and `ffprobe -version`.
 
 Run commands from the repository root:
 
@@ -47,7 +47,7 @@ tables. To migrate using another configuration:
 uv run alembic -x config=/path/to/settings.yaml upgrade head
 ```
 
-The migrations create `sessions` and `assets`; Alembic tracks revisions in
+The migrations create `sessions`, `assets`, and `render_runs`; Alembic tracks revisions in
 `alembic_version`. Session creation allocates public identifiers automatically.
 Imports can advance `created` to `assets_ready`. Status values are readable strings
 validated by a SQLite check constraint. JSON stores specification snapshots.
@@ -220,6 +220,66 @@ An import reports missing or changed tracked duplicate files instead of
 silently accepting them. Manifests can always be regenerated from database
 records, but regeneration does not repair or revalidate source media.
 
+## Continuous audio rendering
+
+After importing music and artwork to reach `assets_ready`, run:
+
+```bash
+uv run swale-sounds render audio session-000001
+uv run swale-sounds render audio session-000001 --force
+uv run swale-sounds render audio session-000001 --config /path/to/settings.yaml
+```
+
+Rendering accepts `assets_ready` and `audio_rendered` sessions. It requires at
+least one music Asset and zero or one ambience Asset. It does not read artwork.
+Preflight verifies the canonical specification and the selected source paths
+and hashes. Symlinks, missing files and changed sources are rejected.
+
+Music is ordered by Asset path, then public ID. FFmpeg selects the first audio
+stream, normalizes each track to the configured sample rate and channels in
+FLAC, and concatenates them with hard transitions. The sequence repeats or
+trims to the specification's duration in minutes. Optional ambience is normalized,
+looped, and mixed at the configured decibel gain. There is no crossfade,
+mastering or loudness normalization; the additive mix can clip.
+
+The final output is AAC in M4A, using the configured bitrate, sample rate and
+channels. Other configured audio codecs are rejected. Metadata is stripped.
+Before publication, ffprobe verifies the codec, rate, channels and duration
+within 0.25 seconds of the target. Publication is atomic and cannot overwrite
+an existing output. Each successful attempt has a unique path:
+`output/audio/render-<uuid>.m4a`. Temporary files in
+`intermediate/render-<uuid>/` are removed after success or expected failure;
+command arguments and FFmpeg diagnostics remain in the run's log under `logs/`.
+Encoding has no short timeout and streams diagnostics directly to disk.
+
+Migration `0003` adds RenderRun without changing earlier migrations or Assets.
+Each run belongs to a Session and records its stage, status, renderer version,
+input/configuration snapshots, fingerprint, FFmpeg version, log path, UTC start
+and finish times, error, and successful output path, hash, size and audio metadata.
+Assets and `manifests/assets.json` remain source-only; rendered media is recorded
+only in RenderRun.
+
+The deterministic fingerprint includes renderer version 1, specification SHA-256,
+ordered source identities/paths/hashes, ambience, audio settings and the FFmpeg
+version line. A matching successful run is reused only after its output path
+and SHA-256 pass validation. Missing or changed cached output produces an error
+suggesting `--force`. Force creates a new run and output, preserving earlier
+outputs and history. Changed inputs or settings also create a new fingerprint.
+Identical bytes across different FFmpeg builds are not guaranteed.
+
+A running row commits before media processing starts. A partial unique index
+allows one running audio render per Session; the database write lock is released
+before FFmpeg runs. Success advances `assets_ready` to `audio_rendered`.
+Expected processing failures retain a failed row and log, remove attempt-owned
+temporary/output files, and leave Session status unchanged. Preflight failures
+do not create a run. Sources are checked again before publication.
+
+SQLite and filesystem publication cannot form one crash-atomic transaction.
+Forced termination can leave a running row, intermediates or an orphan output.
+Inspect the run and log and confirm no renderer is active before manually
+repairing interrupted state. Automatic restart, cancellation and stale-run
+recovery are outside this milestone.
+
 ## Development checks
 
 ```bash
@@ -232,6 +292,7 @@ uv run mypy src
 
 Tests use temporary configuration files and SQLite databases, including real
 Alembic upgrades, schema comparison, and downgrade/upgrade coverage.
-Real-media tests generate tiny WAV and PNG fixtures and invoke ffprobe. They
-explicitly skip when ffprobe is unavailable; Milestone 3 development acceptance
-requires running them with ffprobe installed. No binary fixtures are committed.
+Real-media tests generate WAV and PNG fixtures and invoke FFmpeg/ffprobe,
+including one-minute audio renders. Media tests explicitly skip when required
+executables are unavailable; development acceptance requires both executables
+installed and no media-test skips. No binary fixtures are committed.
