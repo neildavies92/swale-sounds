@@ -91,3 +91,32 @@ def media_files(tmp_path):
         + chunk(b"IEND", b"")
     )
     return music, artwork
+
+
+@pytest.fixture
+def render_session(session_environment, spec_file, spec_data, media_files):
+    import shutil
+
+    from swale_sounds.assets.provenance import Provenance
+    from swale_sounds.assets.service import import_assets
+    from swale_sounds.models import AssetKind
+    from swale_sounds.sessions.service import create_session
+
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("FFmpeg is required for real rendering tests")
+    settings, engine, config = session_environment
+    spec_data["output"]["duration_minutes"] = 1
+    spec_file.write_text(yaml.safe_dump(spec_data), encoding="utf-8")
+    session = create_session(engine, settings.paths.data, spec_file)
+    for source, kind in zip(
+        media_files, (AssetKind.MUSIC, AssetKind.ARTWORK), strict=True
+    ):
+        import_assets(
+            engine,
+            settings.paths.data,
+            session.public_id,
+            source,
+            kind,
+            Provenance(),
+        )
+    return settings, engine, config, session
