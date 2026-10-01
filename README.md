@@ -3,10 +3,10 @@
 A local-first application intended to evolve into an automated, data-driven
 long-form music and ambience production system.
 
-Milestone 4 adds continuous audio rendering with persisted render provenance,
-integrity-checked reuse, and optional ambience to the validated session workflow.
+Milestone 5 completes local V1 video production: validated sessions and tracked
+source media become continuous audio and a playable, fully tracked MP4.
 It runs on a developer workstation or directly on a conventional Linux VM.
-Video production is not implemented.
+Artwork is static; publishing and animation are not implemented.
 
 ## Prerequisites and setup
 
@@ -279,6 +279,80 @@ Forced termination can leave a running row, intermediates or an orphan output.
 Inspect the run and log and confirm no renderer is active before manually
 repairing interrupted state. Automatic restart, cancellation and stale-run
 recovery are outside this milestone.
+
+## Long-form video rendering
+
+Upgrade the database, import music and exactly one artwork source, then run
+the two rendering stages explicitly:
+
+```bash
+uv run alembic upgrade head
+uv run swale-sounds render audio session-000001
+uv run swale-sounds render video session-000001
+uv run swale-sounds render video session-000001 --force
+```
+
+Video accepts `audio_rendered` and `video_rendered` sessions. All commands accept
+`--config /path/to/settings.yaml`. The renderer combines exactly one static
+artwork Asset with a current successful audio RenderRun. Multiple artworks
+are not yet supported; `visual.animation` remains descriptive metadata and
+is not executed. Video generation never rebuilds or remixes audio.
+
+The renderer reproduces the audio fingerprint from the current specification,
+ordered music/ambience Asset records, audio configuration, current audio renderer
+version, and each candidate's recorded FFmpeg version. It selects the newest
+matching successful audio run. New sources or changed audio settings make old
+audio stale even if the Session status still says `audio_rendered`; run the
+audio stage first. An FFmpeg upgrade alone does not invalidate existing audio
+for video use. The selected audio file must pass safe-path, SHA-256 and audio
+metadata verification. Video reads the derived audio file, not source music.
+
+FFmpeg loops the artwork at `media.video.fps`, scales it to fit inside
+`media.video.width` × `media.video.height`, and pads centrally with black while
+preserving aspect ratio. Dimensions must be positive even integers for yuv420p.
+The output uses libx264/H.264, medium preset, stillimage tune, yuv420p, and copies
+the existing AAC stream into MP4 with faststart. Metadata and chapters are
+stripped. Rendering ends at the verified audio duration.
+
+Before publication, ffprobe must confirm exactly one H.264 video stream and one
+AAC audio stream, the requested dimensions, pixel format, frame rate, sample
+rate and channels. Container and stream durations must be within 0.25 seconds
+of the verified audio duration. Artwork and audio hashes are checked again.
+Each output is published exclusively to `output/video/render-<uuid>.mp4`.
+Source artwork remains unchanged.
+
+The provenance chain is:
+
+```text
+Session specification → source Assets → audio RenderRun → video RenderRun
+                              artwork Asset ────────────────────┘
+```
+
+Assets are immutable imported sources. Audio RenderRuns describe derived
+continuous audio; video RenderRuns describe final video. `assets.json` stays
+source-only. Video input snapshots reference the audio run's public ID, path,
+hash and fingerprint plus the artwork Asset's identity, path and hash. Its
+configuration snapshot records dimensions/FPS and encoder, format and copy
+semantics. Video renderer version 1 and the current FFmpeg version participate
+in its fingerprint; final output SHA-256 completes the provenance chain.
+
+An identical valid request reuses the matching successful video. Changed
+video settings create a new run. `--force` creates another immutable output,
+preserving historical runs and files. Missing, unsafe or changed cached output
+fails with guidance to use `--force`; history is never silently repaired.
+
+Migration `0004` recreates the SQLite render table through Alembic batch
+alteration, extending the stage constraint to `audio`/`video` and adding nullable
+positive `width`, `height` and `frame_rate` columns. Existing audio rows and
+fingerprints are preserved. Downgrade refuses to discard existing video history.
+One running render per Session and stage is permitted, so audio and video do
+not share a global lock. A running row commits before encoding starts.
+
+Success advances `audio_rendered` to `video_rendered`; repeat renders retain
+`video_rendered`. Failures preserve Session status and retain the failed run
+and log while cleaning attempt-owned media. Preflight failures create no run.
+The interrupted-process and non-atomic filesystem/database limitations described
+above also apply to video. No automatic publishing or background worker is used.
 
 ## Development checks
 

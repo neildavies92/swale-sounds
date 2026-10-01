@@ -26,6 +26,7 @@ if TYPE_CHECKING:
 
 class RenderStage(StrEnum):
     AUDIO = "audio"
+    VIDEO = "video"
 
 
 class RenderStatus(StrEnum):
@@ -62,6 +63,9 @@ class RenderRun(Base):
         ),
         CheckConstraint("sample_rate > 0", name="render_rate_positive"),
         CheckConstraint("channels > 0", name="render_channels_positive"),
+        CheckConstraint("width > 0", name="render_width_positive"),
+        CheckConstraint("height > 0", name="render_height_positive"),
+        CheckConstraint("frame_rate > 0", name="render_fps_positive"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -102,6 +106,9 @@ class RenderRun(Base):
     sample_rate: Mapped[int | None]
     channels: Mapped[int | None]
     codec_name: Mapped[str | None] = mapped_column(Text)
+    width: Mapped[int | None]
+    height: Mapped[int | None]
+    frame_rate: Mapped[float | None] = mapped_column(Float)
     log_path: Mapped[str] = mapped_column(Text)
     started_at: Mapped[datetime] = mapped_column(
         UTCDateTime(), default=utc_now
