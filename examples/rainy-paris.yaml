@@ -1,0 +1,22 @@
+spec_version: 1
+session:
+  title: rainy paris cafe
+music:
+  genre: [jazz]
+  mood: [cozy, peaceful]
+  bpm:
+    min: 65
+    max: 78
+  instruments: [piano, upright_bass, brushed_drums]
+context:
+  purpose: [reading, focus]
+  environment: [cafe]
+  location: [paris]
+  weather: [rain]
+  time: [night]
+  season: [autumn]
+visual:
+  style: illustrated
+  animation: [rain, steam, window_reflections]
+output:
+  duration_minutes: 90
