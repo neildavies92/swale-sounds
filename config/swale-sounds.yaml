@@ -17,3 +17,13 @@ media:
     bitrate: 192k
   ambience:
     gain_db: -18
+generation:
+  artwork:
+    provider: openai
+    model: gpt-image-2.5-flare-2026-09-08
+    size: 1536x864
+    quality: medium
+    output_format: png
+    background: opaque
+    moderation: auto
+    timeout_seconds: 180

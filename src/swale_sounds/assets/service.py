@@ -137,6 +137,8 @@ def import_assets(
     source: Path,
     kind: AssetKind,
     provenance: Provenance,
+    *,
+    require_created_without_artwork: bool = False,
 ) -> ImportResult:
     try:
         with engine.connect() as connection:
@@ -155,6 +157,17 @@ def import_assets(
                         select(Asset).where(Asset.session_id == session.id)
                     )
                 )
+                if require_created_without_artwork and (
+                    kind != AssetKind.ARTWORK
+                    or session.status != SessionStatus.CREATED
+                    or any(
+                        asset.kind == AssetKind.ARTWORK for asset in existing
+                    )
+                ):
+                    raise AssetError(
+                        "Import requires a created Session without artwork; "
+                        "Session state changed before import."
+                    )
                 candidates, skipped = preflight(
                     source, kind, workspace, existing
                 )

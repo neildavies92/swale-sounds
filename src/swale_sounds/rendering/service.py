@@ -118,14 +118,12 @@ class AudioIntent:
     inputs: dict[str, JsonValue]
 
 
-def current_audio_intent(
-    db: DatabaseSession, session: Session, settings: AppConfig, workspace: Path
-) -> AudioIntent:
-    """Describe current audio intent without reading its source media bytes."""
+def verified_session_spec(
+    session: Session, data_root: Path, workspace: Path
+) -> SessionSpec:
+    """Verify canonical disk and database specification before using it."""
     spec = SessionSpec.model_validate(session.spec_json)
-    spec_path = persisted_path(
-        settings.paths.data, workspace, session.spec_path
-    )
+    spec_path = persisted_path(data_root, workspace, session.spec_path)
     if (
         not spec_path.is_file()
         or calculate_sha256(spec_path) != session.spec_sha256
@@ -135,6 +133,14 @@ def current_audio_intent(
             "Session specification provenance no longer matches "
             "disk/database state."
         )
+    return spec
+
+
+def current_audio_intent(
+    db: DatabaseSession, session: Session, settings: AppConfig, workspace: Path
+) -> AudioIntent:
+    """Describe current audio intent without reading its source media bytes."""
+    spec = verified_session_spec(session, settings.paths.data, workspace)
     assets = list(
         db.scalars(
             select(Asset)
