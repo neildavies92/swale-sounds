@@ -3,15 +3,17 @@
 import json
 import os
 import shutil
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TextIO
 from uuid import uuid4
 
 from pydantic import JsonValue, ValidationError
 from sqlalchemy import Connection, Engine, select
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session as DatabaseSession
 
 from swale_sounds.assets.files import (
     calculate_sha256,
@@ -109,6 +111,93 @@ def asset_snapshot(asset: Asset) -> dict[str, JsonValue]:
 
 
 @dataclass(frozen=True)
+class AudioIntent:
+    music: list[Asset]
+    ambience: list[Asset]
+    settings: AudioSettings
+    inputs: dict[str, JsonValue]
+
+
+def current_audio_intent(
+    db: DatabaseSession, session: Session, settings: AppConfig, workspace: Path
+) -> AudioIntent:
+    """Describe current audio intent without reading its source media bytes."""
+    spec = SessionSpec.model_validate(session.spec_json)
+    spec_path = persisted_path(
+        settings.paths.data, workspace, session.spec_path
+    )
+    if (
+        not spec_path.is_file()
+        or calculate_sha256(spec_path) != session.spec_sha256
+        or sha256_bytes(canonical_bytes(spec)) != session.spec_sha256
+    ):
+        raise RenderError(
+            "Session specification provenance no longer matches "
+            "disk/database state."
+        )
+    assets = list(
+        db.scalars(
+            select(Asset)
+            .where(
+                Asset.session_id == session.id,
+                Asset.kind.in_([AssetKind.MUSIC, AssetKind.AMBIENCE]),
+            )
+            .order_by(Asset.path, Asset.public_id)
+        )
+    )
+    music = [item for item in assets if item.kind == AssetKind.MUSIC]
+    ambience = [item for item in assets if item.kind == AssetKind.AMBIENCE]
+    if not music:
+        raise RenderError(
+            "Audio rendering requires at least one music source."
+        )
+    if len(ambience) > 1:
+        raise RenderError(
+            "Audio rendering supports at most one ambience source; "
+            f"found {len(ambience)}."
+        )
+    media = settings.media
+    if media.audio.codec != "aac":
+        raise RenderError(
+            f"Unsupported audio codec: {media.audio.codec}. "
+            "Milestone 4 requires aac."
+        )
+    audio_settings = AudioSettings(
+        target_duration_seconds=spec.output.duration_minutes * 60,
+        sample_rate=media.sample_rate,
+        channels=media.channels,
+        codec=media.audio.codec,
+        bitrate=media.audio.bitrate,
+        ambience_gain_db=media.ambience.gain_db,
+    )
+    inputs: dict[str, JsonValue] = {
+        "spec_sha256": session.spec_sha256,
+        "music": [asset_snapshot(item) for item in music],
+        "ambience": asset_snapshot(ambience[0]) if ambience else None,
+    }
+    return AudioIntent(music, ambience, audio_settings, inputs)
+
+
+def verified_render_output(
+    data_root: Path, workspace: Path, run: RenderRun
+) -> Path:
+    try:
+        output = persisted_path(data_root, workspace, run.output_path or "")
+        if (
+            not output.is_file()
+            or calculate_sha256(output) != run.output_sha256
+        ):
+            raise RenderError("Output is missing or its SHA-256 has changed.")
+        return output
+    except (OSError, AssetError, RenderError) as exc:
+        raise RenderError(
+            "Recorded output provenance no longer matches "
+            f"disk state for {run.public_id}: {exc}. "
+            "Use --force for a new output."
+        ) from exc
+
+
+@dataclass(frozen=True)
 class RenderResult:
     run: RenderRun
     reused: bool
@@ -172,66 +261,15 @@ def reserve_render(
             workspace = safe_workspace(
                 settings.paths.data, session.workspace_path
             )
-            spec = SessionSpec.model_validate(session.spec_json)
-            spec_path = persisted_path(
-                settings.paths.data, workspace, session.spec_path
-            )
-            if (
-                not spec_path.is_file()
-                or calculate_sha256(spec_path) != session.spec_sha256
-                or sha256_bytes(canonical_bytes(spec)) != session.spec_sha256
-            ):
-                raise RenderError(
-                    "Session specification provenance no longer matches "
-                    "disk/database state."
-                )
-            assets = list(
-                db.scalars(
-                    select(Asset)
-                    .where(
-                        Asset.session_id == session.id,
-                        Asset.kind.in_([AssetKind.MUSIC, AssetKind.AMBIENCE]),
-                    )
-                    .order_by(Asset.path, Asset.public_id)
-                )
-            )
-            music = [item for item in assets if item.kind == AssetKind.MUSIC]
-            ambience = [
-                item for item in assets if item.kind == AssetKind.AMBIENCE
-            ]
-            if not music:
-                raise RenderError(
-                    "Audio rendering requires at least one music source."
-                )
-            if len(ambience) > 1:
-                raise RenderError(
-                    "Audio rendering supports at most one ambience source; "
-                    f"found {len(ambience)}."
-                )
+            intent = current_audio_intent(db, session, settings, workspace)
+            music, ambience = intent.music, intent.ambience
+            assets = music + ambience
             paths = {
                 item.id: verify_source(settings.paths.data, workspace, item)
                 for item in assets
             }
-            media = settings.media
-            if media.audio.codec != "aac":
-                raise RenderError(
-                    f"Unsupported audio codec: {media.audio.codec}. "
-                    "Milestone 4 requires aac."
-                )
-            audio_settings = AudioSettings(
-                target_duration_seconds=spec.output.duration_minutes * 60,
-                sample_rate=media.sample_rate,
-                channels=media.channels,
-                codec=media.audio.codec,
-                bitrate=media.audio.bitrate,
-                ambience_gain_db=media.ambience.gain_db,
-            )
+            audio_settings, inputs = intent.settings, intent.inputs
             executable, version = find_ffmpeg()
-            inputs: dict[str, JsonValue] = {
-                "spec_sha256": session.spec_sha256,
-                "music": [asset_snapshot(item) for item in music],
-                "ambience": asset_snapshot(ambience[0]) if ambience else None,
-            }
             configuration = audio_settings.model_dump(mode="json")
             fingerprint = input_fingerprint(
                 inputs, configuration, version, AUDIO_RENDERER_VERSION
@@ -248,26 +286,9 @@ def reserve_render(
                     .order_by(RenderRun.id.desc())
                 )
                 if existing is not None:
-                    try:
-                        output = persisted_path(
-                            settings.paths.data,
-                            workspace,
-                            existing.output_path or "",
-                        )
-                        if (
-                            not output.is_file()
-                            or calculate_sha256(output)
-                            != existing.output_sha256
-                        ):
-                            raise RenderError(
-                                "Output is missing or its SHA-256 has changed."
-                            )
-                    except (OSError, AssetError, RenderError) as exc:
-                        raise RenderError(
-                            "Recorded output provenance no longer matches "
-                            f"disk state for {existing.public_id}: {exc}. "
-                            "Use --force for a new output."
-                        ) from exc
+                    verified_render_output(
+                        settings.paths.data, workspace, existing
+                    )
                     db.expunge(existing)
                     return RenderResult(existing, reused=True)
             render_id = f"render-{uuid4().hex}"
@@ -328,6 +349,7 @@ def record_success(
     size: int,
     stream: MediaStream,
     duration: float,
+    video: MediaStream | None = None,
 ) -> RenderRun:
     with engine.connect() as connection:
         connection.exec_driver_sql("BEGIN IMMEDIATE")
@@ -346,12 +368,25 @@ def record_success(
             run.sample_rate = stream.sample_rate
             run.channels = stream.channels
             run.codec_name = stream.codec_name
+            if video is not None:
+                from swale_sounds.rendering.video import parse_frame_rate
+
+                run.codec_name = video.codec_name
+                run.width = video.width
+                run.height = video.height
+                run.frame_rate = parse_frame_rate(video.avg_frame_rate)
             session = db.get(Session, run.session_id)
-            if session is not None and session.status in {
-                SessionStatus.ASSETS_READY,
-                SessionStatus.AUDIO_RENDERED,
-            }:
-                session.status = SessionStatus.AUDIO_RENDERED
+            if session is not None:
+                if run.stage == RenderStage.VIDEO and session.status in {
+                    SessionStatus.AUDIO_RENDERED,
+                    SessionStatus.VIDEO_RENDERED,
+                }:
+                    session.status = SessionStatus.VIDEO_RENDERED
+                elif run.stage == RenderStage.AUDIO and session.status in {
+                    SessionStatus.ASSETS_READY,
+                    SessionStatus.AUDIO_RENDERED,
+                }:
+                    session.status = SessionStatus.AUDIO_RENDERED
             db.flush()
             db.expunge(run)
             commit_or_discard(connection)
@@ -361,10 +396,48 @@ def record_success(
 def execute_render(
     engine: Engine, settings: AppConfig, plan: RenderPlan
 ) -> RenderResult:
-    run = plan.run
-    log_path = plan.workspace / "logs" / f"{run.public_id}.log"
-    temporary = plan.workspace / "intermediate" / run.public_id
-    output = plan.workspace / "output/audio" / f"{run.public_id}.m4a"
+    def candidate(
+        directory: Path, log: TextIO
+    ) -> tuple[Path, MediaStream, float, MediaStream | None]:
+        path = render_pipeline(
+            plan.executable,
+            plan.music,
+            plan.ambience,
+            directory,
+            plan.settings,
+            log,
+        )
+        stream, duration = verify_output(path, plan.settings)
+        return path, stream, duration, None
+
+    return execute_attempt(
+        engine,
+        settings,
+        plan.run,
+        plan.workspace,
+        plan.source_hashes,
+        "m4a",
+        candidate,
+    )
+
+
+def execute_attempt(
+    engine: Engine,
+    settings: AppConfig,
+    run: RenderRun,
+    workspace: Path,
+    source_hashes: dict[Path, str],
+    extension: str,
+    render_candidate: Callable[
+        [Path, TextIO], tuple[Path, MediaStream, float, MediaStream | None]
+    ],
+) -> RenderResult:
+    """Shared attempt ownership, publication and history for both stages."""
+    log_path = workspace / "logs" / f"{run.public_id}.log"
+    temporary = workspace / "intermediate" / run.public_id
+    output = (
+        workspace / "output" / run.stage.value / f"{run.public_id}.{extension}"
+    )
     published = False
     succeeded = False
     log_created = False
@@ -372,32 +445,32 @@ def execute_render(
         try:
             for path in (log_path, temporary, output):
                 safe_child(
-                    plan.workspace,
-                    path.relative_to(plan.workspace).as_posix(),
+                    workspace,
+                    path.relative_to(workspace).as_posix(),
                 )
             with open_render_log(log_path) as log:
                 log_created = True
                 log.write(f"{run.public_id}\n{run.ffmpeg_version}\n")
                 with intermediate_directory(temporary):
-                    candidate = render_pipeline(
-                        plan.executable,
-                        plan.music,
-                        plan.ambience,
-                        temporary,
-                        plan.settings,
-                        log,
+                    candidate, stream, duration, video = render_candidate(
+                        temporary, log
                     )
-                    stream, duration = verify_output(candidate, plan.settings)
-                    for source, expected_hash in plan.source_hashes.items():
+                    for source, expected_hash in source_hashes.items():
                         safe_child(
-                            plan.workspace,
-                            source.relative_to(plan.workspace).as_posix(),
+                            workspace,
+                            source.relative_to(workspace).as_posix(),
                         )
-                        if calculate_sha256(source) != expected_hash:
+                        if (
+                            not source.is_file()
+                            or calculate_sha256(source) != expected_hash
+                        ):
                             raise RenderError(
                                 "Source changed during rendering: "
                                 f"{source.name}"
                             )
+                    safe_child(
+                        workspace, output.relative_to(workspace).as_posix()
+                    )
                     output.parent.mkdir(exist_ok=True)
                     # Publish atomically without replacing an existing file.
                     os.link(candidate, output)
@@ -412,6 +485,7 @@ def execute_render(
                 size,
                 stream,
                 duration,
+                video,
             )
             succeeded = True
             return RenderResult(finished, reused=False)
@@ -441,7 +515,8 @@ def execute_render(
                 f"and database state: {database_error}"
             ) from database_error
         raise RenderError(
-            f"Audio render failed. Render: {run.public_id}\n"
+            f"{run.stage.value.capitalize()} render failed. "
+            f"Render: {run.public_id}\n"
             f"Log: {log_path}\n{message}"
         ) from exc
 

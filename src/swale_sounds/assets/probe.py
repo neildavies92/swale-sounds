@@ -28,6 +28,8 @@ class MediaStream(BaseModel):
     width: int | None = Field(default=None, gt=0)
     height: int | None = Field(default=None, gt=0)
     nb_read_frames: int | None = Field(default=None, ge=0)
+    pix_fmt: str | None = None
+    avg_frame_rate: str | None = None
 
     @field_validator(
         "duration",
