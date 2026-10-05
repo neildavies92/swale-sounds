@@ -1,15 +1,19 @@
 # Swale Sounds
 
-A local-first application intended to evolve into an automated, data-driven
-long-form music and ambience production system.
+A local-first application for producing long-form music and ambience videos.
+**Phase 1, the local production engine, is complete:** Session specifications,
+source Asset provenance/import, continuous audio rendering, static-artwork video
+rendering, and optional OpenAI artwork generation.
 
-Milestone 5 completes local V1 video production: validated sessions and tracked
-source media become continuous audio and a playable, fully tracked MP4.
-It runs on a developer workstation or directly on a conventional Linux VM.
-Artwork is static; publishing and animation are not implemented.
+The project is moving into a publish/measure MVP: repeated, controlled YouTube
+content experiments with minimal music-generation cost. YouTube Audio Library
+is the default MVP music source, acquired manually by the operator. Original/AI
+music is deferred until audience demand is validated. Publishing and analytics
+are not yet implemented.
 
-Milestone 6 adds optional OpenAI artwork generation that feeds the same source
-Asset and rendering pipeline.
+See the **[MVP strategy, success criteria, and roadmap](docs/mvp.md)**.
+The existing production engine runs on a developer workstation or a conventional
+Linux VM.
 
 ## Prerequisites and setup
 
@@ -33,6 +37,11 @@ and pytest. `make smoke` runs the real CLI through a fresh isolated database,
 one-minute Session, generated music and portrait artwork, and a verified
 640×360 H.264/AAC MP4. FFmpeg and ffprobe must be on PATH; missing tools fail
 the smoke test rather than skipping it.
+
+GitHub Actions runs these same three commands on pull requests and pushes to
+`main`, using Ubuntu, Python from `.python-version`, uv, and FFmpeg/ffprobe.
+Application tests use mocked artwork providers and require no provider or
+YouTube credentials.
 
 Smoke state lives in a temporary directory, never the normal `data/` workspace.
 Success removes it; failure retains it and reports the failed step, command
@@ -143,6 +152,21 @@ process termination or power loss may leave an orphan workspace, which must
 be inspected before retrying. Creation fails safely if that path already exists.
 
 ## Source asset import and provenance
+
+For the MVP, manually acquire music from YouTube Audio Library and prefer tracks
+that do not require attribution. Import downloaded files with the existing
+command, recording the licence evidence you checked (replace the example notes
+with the actual track details and terms):
+
+```bash
+uv run swale-sounds asset import session-000001 ./input/music --kind music \
+  --provider youtube_audio_library \
+  --licence-notes "Track: <title/artist>; acquired: <date>; licence: <checked terms>; attribution: <checked requirement>"
+```
+
+Notes apply to every new Asset in the batch; import tracks separately when their
+evidence differs. This provider label records provenance, not a downloading
+integration or a grant of rights. See the [MVP sourcing strategy](docs/mvp.md).
 
 Upgrade the database before using the asset commands:
 
