@@ -8,8 +8,8 @@ rendering, and optional OpenAI artwork generation.
 The project is moving into a publish/measure MVP: repeated, controlled YouTube
 content experiments with minimal music-generation cost. YouTube Audio Library
 is the default MVP music source, acquired manually by the operator. Original/AI
-music is deferred until audience demand is validated. Publishing and analytics
-are not yet implemented.
+music is deferred until audience demand is validated. Local publication planning
+is available; uploading, publication tracking, and analytics are future work.
 
 See the **[MVP strategy, success criteria, and roadmap](docs/mvp.md)**.
 The existing production engine runs on a developer workstation or a conventional
@@ -35,7 +35,8 @@ make smoke
 `make setup` runs `uv sync`. `make check` verifies formatting, lint, strict mypy
 and pytest. `make smoke` runs the real CLI through a fresh isolated database,
 one-minute Session, generated music and portrait artwork, and a verified
-640×360 H.264/AAC MP4. FFmpeg and ffprobe must be on PATH; missing tools fail
+640×360 H.264/AAC MP4 and a validated publication plan. FFmpeg and ffprobe must
+be on PATH; missing tools fail
 the smoke test rather than skipping it.
 
 GitHub Actions runs these same three commands on pull requests and pushes to
@@ -151,6 +152,96 @@ for inspection. SQLite and the filesystem are not one atomic transaction:
 process termination or power loss may leave an orphan workspace, which must
 be inspected before retrying. Creation fails safely if that path already exists.
 
+## Publication planning
+
+Produce a local YouTube publication package from a current successful video:
+
+```bash
+uv run swale-sounds session create examples/rainy-paris.yaml
+# Use the Session ID printed above; verify licence terms before importing.
+uv run swale-sounds asset import session-000001 ./input/music --kind music \
+  --provider youtube_audio_library \
+  --licence-notes "Attribution: not required; Track: TITLE by ARTIST; checked: DATE"
+uv run swale-sounds asset import session-000001 ./input/cover.png --kind artwork
+uv run swale-sounds render audio session-000001
+uv run swale-sounds render video session-000001
+uv run swale-sounds publish plan session-000001
+```
+
+Run migrations first as described above. The plan command also accepts
+`--config /path/to/settings.yaml`. Review the resulting
+`data/sessions/session-000001/output/publish/youtube.json`, then manually upload
+the referenced MP4 through YouTube Studio and review its title, description,
+and tags. **Planning never uploads anything.** Publication tracking and analytics
+are future work; a plan is publishing intent, not evidence of publication.
+
+Version 1 records the Session ID/specification hash, audio and video RenderRun
+IDs, video path/hash, source Asset paths/hashes/IDs, music provenance, metadata,
+and the complete normalized Session specification for future correlation.
+All media paths are relative to the **Session workspace**, identified by
+`path_base: "session_workspace"`, not to `output/publish/`. The MP4 stays in its
+authoritative render location; no large copy or media symlink is created.
+The artwork reference is source artwork, **not a validated YouTube thumbnail**.
+Playlist intents are empty. No database rows or statuses are changed.
+
+Planning shares video fingerprint resolution with rendering and checks canonical
+specification integrity, current audio/configuration, source hashes, video hash,
+size, and probed media metadata. Missing, stale, or damaged output is rejected
+with repair guidance. FFmpeg/ffprobe remain required; a changed FFmpeg version
+can require a new video render, matching rendering's existing reuse rules.
+The existing lifecycle disallows audio rendering after `video_rendered`.
+If replacement music or audio settings require new audio at that stage, create
+a new Session and import its sources. Planning preserves that lifecycle and
+rejects the stale video rather than changing status or rendering implicitly.
+
+JSON uses UTF-8, sorted keys, two-space indentation, and a final newline. It has
+no generation timestamp. Identical inputs produce identical bytes and leave an
+existing identical file untouched. A changed recognized plan for the same
+Session is replaced atomically. Unrecognized files, noncanonical edits, and
+symlinks are rejected; move an edited plan aside before regenerating it. Other
+package files are left alone. Keep operator edits separately from this derived
+artifact and rerun planning before uploading to recheck integrity.
+
+Metadata generation is local and deterministic. Titles use the Session title,
+one mood/genre, and up to two purposes, with readable taxonomy separators and
+a 100-character cap. Tags follow dimension/list order, deduplicate, and fit the
+500-character budget including separators and implied quotes. Descriptions
+retain recorded licence text and fail beyond 5000 UTF-8 bytes or for unsupported
+angle brackets rather than silently cutting credits. These limits follow the
+[YouTube video resource documentation](https://developers.google.com/youtube/v3/docs/videos#snippet).
+
+Music provenance is provider-agnostic. The package includes public Asset IDs,
+original filenames, provider/model, and licence notes/URL/version. Generation
+prompts, parameters, provider plans, and provider responses are excluded.
+Licence fields are intended for public review: record only publishable evidence,
+never credentials or private paths. The planner does not infer rights from a
+provider name or claim ownership.
+
+When licence notes are present, explicitly record one of these declarations
+(case-insensitive, delimited by a newline or semicolon):
+
+```text
+Attribution: not required
+```
+
+or, when required:
+
+```text
+Attribution: required
+Attribution text: Exact credit supplied by the licence holder
+```
+
+Required credits must be recorded on the separate `Attribution text:` line.
+The complete notes are retained in the description. Conflicting declarations,
+unstructured notes without a declaration, and missing required credits fail
+with the Asset ID and an actionable error. Empty notes are represented as
+unknown requirements with an explicit review warning, never as permission.
+Import accurate evidence up front with `--licence-notes`; the existing duplicate
+import rule does not update provenance. For an already imported Asset with
+incomplete evidence, correct the authoritative SQLite provenance through your
+reviewed maintenance process or create a new Session and reimport with complete
+notes; no provenance editing command is added here.
+
 ## Source asset import and provenance
 
 For the MVP, manually acquire music from YouTube Audio Library and prefer tracks
@@ -161,12 +252,14 @@ with the actual track details and terms):
 ```bash
 uv run swale-sounds asset import session-000001 ./input/music --kind music \
   --provider youtube_audio_library \
-  --licence-notes "Track: <title/artist>; acquired: <date>; licence: <checked terms>; attribution: <checked requirement>"
+  --licence-notes "Attribution: not required; Track: TITLE by ARTIST; checked: DATE"
 ```
 
 Notes apply to every new Asset in the batch; import tracks separately when their
 evidence differs. This provider label records provenance, not a downloading
 integration or a grant of rights. See the [MVP sourcing strategy](docs/mvp.md).
+
+Use the example's attribution declaration only when the checked terms support it.
 
 Upgrade the database before using the asset commands:
 
