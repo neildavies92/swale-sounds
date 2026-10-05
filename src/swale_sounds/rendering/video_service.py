@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from pydantic import JsonValue, ValidationError
 from sqlalchemy import Engine, select
+from sqlalchemy.orm import Session as DatabaseSession
 
 from swale_sounds.assets.files import safe_workspace
 from swale_sounds.assets.probe import MediaProbeError, MediaStream, probe_media
@@ -77,6 +78,113 @@ class VideoPlan:
     source_hashes: dict[Path, str]
 
 
+@dataclass(frozen=True)
+class VideoIntent:
+    workspace: Path
+    audio_intent: AudioIntent
+    audio_run: RenderRun
+    artwork_asset: Asset
+    audio: Path
+    artwork: Path
+    duration: float
+    executable: str
+    settings: VideoSettings
+    inputs: dict[str, JsonValue]
+    configuration: dict[str, JsonValue]
+    fingerprint: str
+    ffmpeg_version: str
+
+
+def current_video_intent(
+    db: DatabaseSession, session: Session, settings: AppConfig
+) -> VideoIntent:
+    """Resolve shared current inputs for rendering and publication planning."""
+    workspace = safe_workspace(settings.paths.data, session.workspace_path)
+    video_settings = VideoSettings(**settings.media.video.model_dump())
+    intent = current_audio_intent(db, session, settings, workspace)
+    candidates = db.scalars(
+        select(RenderRun)
+        .where(
+            RenderRun.session_id == session.id,
+            RenderRun.stage == RenderStage.AUDIO,
+            RenderRun.status == RenderStatus.SUCCEEDED,
+        )
+        .order_by(RenderRun.id.desc())
+    )
+    audio_run = next(
+        (run for run in candidates if audio_is_current(run, intent)),
+        None,
+    )
+    if audio_run is None:
+        raise RenderError(
+            "No current successful audio render exists for "
+            f"{session.public_id}. "
+            f"Run 'swale-sounds render audio {session.public_id}' first."
+        )
+    try:
+        audio = verified_render_output(
+            settings.paths.data, workspace, audio_run
+        )
+        _, duration = verify_output(audio, intent.settings)
+    except (RenderError, MediaProbeError) as exc:
+        raise RenderError(
+            "Recorded audio render provenance no longer matches "
+            f"disk state: {audio_run.public_id}. "
+            f"Run 'swale-sounds render audio {session.public_id} --force' "
+            f"to repair it. {exc}"
+        ) from exc
+    artworks = list(
+        db.scalars(
+            select(Asset).where(
+                Asset.session_id == session.id,
+                Asset.kind == AssetKind.ARTWORK,
+            )
+        )
+    )
+    if len(artworks) != 1:
+        raise RenderError(
+            "Video rendering requires exactly one artwork source; "
+            f"found {len(artworks)}."
+        )
+    artwork_asset = artworks[0]
+    artwork = verify_source(settings.paths.data, workspace, artwork_asset)
+    compatible_stream(
+        probe_media(artwork, count_frames=True),
+        AssetKind.ARTWORK,
+        artwork,
+    )
+    executable, version = find_ffmpeg()
+    inputs: dict[str, JsonValue] = {
+        "spec_sha256": session.spec_sha256,
+        "audio_render": {
+            "render_id": audio_run.public_id,
+            "output_path": audio_run.output_path,
+            "sha256": audio_run.output_sha256,
+            "input_fingerprint": audio_run.input_fingerprint,
+        },
+        "artwork": asset_snapshot(artwork_asset),
+    }
+    configuration = video_settings.model_dump(mode="json")
+    fingerprint = input_fingerprint(
+        inputs, configuration, version, VIDEO_RENDERER_VERSION
+    )
+    return VideoIntent(
+        workspace,
+        intent,
+        audio_run,
+        artwork_asset,
+        audio,
+        artwork,
+        duration,
+        executable,
+        video_settings,
+        inputs,
+        configuration,
+        fingerprint,
+        version,
+    )
+
+
 def reserve_video(
     engine: Engine, settings: AppConfig, public_id: str, force: bool
 ) -> VideoPlan | RenderResult:
@@ -108,79 +216,17 @@ def reserve_video(
                     f"Video render already running: {active.public_id}. "
                     "Inspect its log before retrying."
                 )
-            workspace = safe_workspace(
-                settings.paths.data, session.workspace_path
-            )
-            video_settings = VideoSettings(**settings.media.video.model_dump())
-            intent = current_audio_intent(db, session, settings, workspace)
-            candidates = db.scalars(
-                select(RenderRun)
-                .where(
-                    RenderRun.session_id == session.id,
-                    RenderRun.stage == RenderStage.AUDIO,
-                    RenderRun.status == RenderStatus.SUCCEEDED,
-                )
-                .order_by(RenderRun.id.desc())
-            )
-            audio_run = next(
-                (run for run in candidates if audio_is_current(run, intent)),
-                None,
-            )
-            if audio_run is None:
-                raise RenderError(
-                    "No current successful audio render exists for "
-                    f"{public_id}. "
-                    f"Run 'swale-sounds render audio {public_id}' first."
-                )
-            try:
-                audio = verified_render_output(
-                    settings.paths.data, workspace, audio_run
-                )
-                _, duration = verify_output(audio, intent.settings)
-            except (RenderError, MediaProbeError) as exc:
-                raise RenderError(
-                    "Recorded audio render provenance no longer matches "
-                    f"disk state: {audio_run.public_id}. "
-                    f"Run 'swale-sounds render audio {public_id} --force' "
-                    f"to repair it. {exc}"
-                ) from exc
-            artworks = list(
-                db.scalars(
-                    select(Asset).where(
-                        Asset.session_id == session.id,
-                        Asset.kind == AssetKind.ARTWORK,
-                    )
-                )
-            )
-            if len(artworks) != 1:
-                raise RenderError(
-                    "Video rendering requires exactly one artwork source; "
-                    f"found {len(artworks)}."
-                )
-            artwork_asset = artworks[0]
-            artwork = verify_source(
-                settings.paths.data, workspace, artwork_asset
-            )
-            compatible_stream(
-                probe_media(artwork, count_frames=True),
-                AssetKind.ARTWORK,
-                artwork,
-            )
-            executable, version = find_ffmpeg()
-            inputs: dict[str, JsonValue] = {
-                "spec_sha256": session.spec_sha256,
-                "audio_render": {
-                    "render_id": audio_run.public_id,
-                    "output_path": audio_run.output_path,
-                    "sha256": audio_run.output_sha256,
-                    "input_fingerprint": audio_run.input_fingerprint,
-                },
-                "artwork": asset_snapshot(artwork_asset),
-            }
-            configuration = video_settings.model_dump(mode="json")
-            fingerprint = input_fingerprint(
-                inputs, configuration, version, VIDEO_RENDERER_VERSION
-            )
+            current = current_video_intent(db, session, settings)
+            workspace = current.workspace
+            intent = current.audio_intent
+            audio_run = current.audio_run
+            artwork_asset = current.artwork_asset
+            audio, artwork = current.audio, current.artwork
+            duration = current.duration
+            executable, version = current.executable, current.ffmpeg_version
+            video_settings = current.settings
+            inputs, configuration = current.inputs, current.configuration
+            fingerprint = current.fingerprint
             if not force:
                 existing = db.scalar(
                     select(RenderRun)

@@ -8,8 +8,9 @@ clusters deserve further investment, while keeping music-generation cost close
 to zero.
 
 The MVP is a repeatable series of controlled publish/measure experiments, not
-full automation. Phase 1 local production is complete; publication and analytics
-remain future work.
+full automation. Phase 1 local production is complete. Phase 2 now includes local
+publication planning; uploading, publication tracking, and analytics remain
+future work.
 
 ## Production loop and sourcing
 
@@ -56,10 +57,14 @@ rendering, video rendering, and artwork generation.
 
 ### Phase 2 — Publishable MVP
 
-**Next.** YouTube Audio Library sourcing convention, PublicationPlan,
+**In progress.** YouTube Audio Library sourcing convention, PublicationPlan,
 title/description/tags metadata, thumbnail packaging, manual YouTube upload, and
-Publication ↔ YouTube video ID tracking. The sourcing convention above guides
-manual imports now; the publication features remain to be built.
+Publication ↔ YouTube video ID tracking. Sourcing conventions and deterministic
+local PublicationPlan are available now. Run `swale-sounds publish plan` after
+rendering, review the package, then manually upload the referenced MP4 through
+YouTube Studio. See the [publication workflow](../README.md#publication-planning).
+The command does not upload anything or record a publication. Thumbnail
+transformation and Publication ↔ YouTube video ID tracking remain future work.
 
 ### Phase 3 — Measurement MVP
 

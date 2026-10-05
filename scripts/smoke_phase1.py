@@ -13,6 +13,8 @@ from pathlib import Path
 
 import yaml
 
+from swale_sounds.publishing.models import PublicationPlan
+
 REPOSITORY = Path(__file__).resolve().parents[1]
 SESSION_ID = "session-000001"
 
@@ -109,6 +111,16 @@ def verify_result(root: Path, ffprobe: str) -> None:
     with output.open("rb") as stream:
         if hashlib.file_digest(stream, "sha256").hexdigest() != rows[0][1]:
             raise SmokeError("Final MP4 SHA-256 does not match its RenderRun")
+    workspace = root / "data" / "sessions" / SESSION_ID
+    manifest = workspace / "output/publish/youtube.json"
+    plan = PublicationPlan.model_validate_json(manifest.read_bytes())
+    if (
+        plan.session_id != SESSION_ID
+        or workspace / plan.video.path != output
+        or plan.video.sha256 != rows[0][1]
+        or plan.content.output.duration_minutes != 1
+    ):
+        raise SmokeError("Publication plan does not match the produced video")
     media = json.loads(
         run(
             [
@@ -276,6 +288,17 @@ def main() -> int:
                     str(cli),
                     "render",
                     "video",
+                    SESSION_ID,
+                    "--config",
+                    str(config),
+                ],
+            ),
+            (
+                "planning publication",
+                [
+                    str(cli),
+                    "publish",
+                    "plan",
                     SESSION_ID,
                     "--config",
                     str(config),
