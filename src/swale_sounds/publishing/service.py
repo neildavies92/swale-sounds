@@ -22,12 +22,17 @@ from swale_sounds.publishing.metadata import (
     title_for,
 )
 from swale_sounds.publishing.models import (
+    AnyPublicationPlan,
     PublicationError,
     PublicationPlan,
+    PublicationPlanV2,
     SourceReference,
     VideoReference,
+    parse_plan,
     plan_bytes,
+    plan_with_thumbnail,
 )
+from swale_sounds.publishing.thumbnail import create_thumbnail
 from swale_sounds.rendering.ffmpeg import RenderError
 from swale_sounds.rendering.service import (
     verified_render_output,
@@ -43,7 +48,31 @@ from swale_sounds.rendering.video_service import current_video_intent
 from swale_sounds.sessions.service import SessionNotFoundError
 
 
-def write_package(workspace: Path, plan: PublicationPlan) -> Path:
+def read_existing_plan(
+    workspace: Path, session_id: str
+) -> AnyPublicationPlan | None:
+    path = safe_child(workspace, "output/publish/youtube.json")
+    if not path.exists():
+        return None
+    if not path.is_file():
+        raise PublicationError("Publication manifest is not a regular file")
+    payload = path.read_bytes()
+    try:
+        old = parse_plan(payload)
+    except ValidationError as exc:
+        raise PublicationError(
+            "Existing youtube.json is not a recognized publication plan; "
+            "move it aside before retrying."
+        ) from exc
+    if old.session_id != session_id or plan_bytes(old) != payload:
+        raise PublicationError(
+            "Existing youtube.json belongs to another Session or has been "
+            "edited; move it aside before retrying."
+        )
+    return old
+
+
+def write_package(workspace: Path, plan: AnyPublicationPlan) -> Path:
     path = safe_child(workspace, "output/publish/youtube.json")
     contents = plan_bytes(plan)
     previous: bytes | None = None
@@ -54,7 +83,7 @@ def write_package(workspace: Path, plan: PublicationPlan) -> Path:
             )
         previous = path.read_bytes()
         try:
-            old = PublicationPlan.model_validate_json(previous)
+            old = parse_plan(previous)
         except ValidationError as exc:
             raise PublicationError(
                 "Existing youtube.json is not a recognized publication plan; "
@@ -180,7 +209,7 @@ def derive_plan(
 
 def create_publication_plan(
     engine: Engine, settings: AppConfig, public_id: str
-) -> tuple[PublicationPlan, Path]:
+) -> tuple[PublicationPlanV2, Path]:
     try:
         # Same serialization boundary as imports/renders/manifests. No writes
         # or commit: exiting rolls back the read transaction and releases it.
@@ -195,7 +224,16 @@ def create_publication_plan(
                         f"Session not found: {public_id}"
                     )
                 plan, workspace = derive_plan(db, settings, session)
-                return plan, write_package(workspace, plan)
+                old = read_existing_plan(workspace, public_id)
+                thumbnail = create_thumbnail(
+                    workspace,
+                    plan.artwork,
+                    old.thumbnail
+                    if isinstance(old, PublicationPlanV2)
+                    else None,
+                )
+                current = plan_with_thumbnail(plan, thumbnail)
+                return current, write_package(workspace, current)
     except (AssetError, MediaProbeError, RenderError) as exc:
         raise PublicationError(
             f"{exc} Verify source/specification integrity, then run "

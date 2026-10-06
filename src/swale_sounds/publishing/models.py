@@ -4,7 +4,7 @@ import json
 from pathlib import PurePosixPath
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator
 
 from swale_sounds.sessions.schema import SessionSpec
 
@@ -66,8 +66,7 @@ def tags_length(tags: list[str]) -> int:
     )
 
 
-class PublicationPlan(PlanModel):
-    plan_version: Literal[1] = 1
+class PublicationFields(PlanModel):
     platform: Literal["youtube"] = "youtube"
     session_id: str
     spec_sha256: Digest
@@ -109,7 +108,66 @@ class PublicationPlan(PlanModel):
         return value
 
 
-def plan_bytes(plan: PublicationPlan) -> bytes:
+class ThumbnailSettings(PlanModel):
+    transform_version: int = Field(default=1, ge=1)
+    width: Literal[1280] = 1280
+    height: Literal[720] = 720
+    fit: Literal["cover_center_crop"] = "cover_center_crop"
+    format: Literal["jpeg"] = "jpeg"
+    codec: Literal["mjpeg"] = "mjpeg"
+    pixel_format: Literal["yuvj420p"] = "yuvj420p"
+    quality: int = Field(default=2, ge=2, le=31)
+    max_size_bytes: Literal[2000000] = 2000000
+    scale_flags: Literal["lanczos"] = "lanczos"
+    threads: Literal[1] = 1
+    strip_metadata: Literal[True] = True
+
+
+class ThumbnailReference(MediaReference):
+    size_bytes: int = Field(gt=0, lt=2000000)
+    width: Literal[1280] = 1280
+    height: Literal[720] = 720
+    format: Literal["jpeg"] = "jpeg"
+    source_asset_id: str
+    source_sha256: Digest
+    settings: ThumbnailSettings
+    ffmpeg_version: str
+    fingerprint: Digest
+
+
+class PublicationPlan(PublicationFields):
+    """The original v1 schema remains valid historical evidence."""
+
+    plan_version: Literal[1] = 1
+
+
+class PublicationPlanV2(PublicationFields):
+    plan_version: Literal[2] = 2
+    thumbnail: ThumbnailReference
+
+
+type AnyPublicationPlan = PublicationPlan | PublicationPlanV2
+
+
+def parse_plan(payload: bytes) -> AnyPublicationPlan:
+    return TypeAdapter(
+        Annotated[AnyPublicationPlan, Field(discriminator="plan_version")]
+    ).validate_json(payload)
+
+
+def plan_with_thumbnail(
+    plan: PublicationPlan, thumbnail: ThumbnailReference
+) -> PublicationPlanV2:
+    return PublicationPlanV2.model_validate(
+        {
+            **plan.model_dump(),
+            "plan_version": 2,
+            "thumbnail": thumbnail,
+        }
+    )
+
+
+def plan_bytes(plan: AnyPublicationPlan) -> bytes:
     """Stable UTF-8 JSON, sorted keys, two-space indentation, final LF."""
     return (
         json.dumps(

@@ -9,7 +9,7 @@ to zero.
 
 The MVP is a repeatable series of controlled publish/measure experiments, not
 full automation. Phase 1 local production is complete. Phase 2 now includes local
-publication planning and manual publication records; automatic uploading and
+publication planning, thumbnails, and manual publication records; automatic uploading and
 analytics remain future work.
 
 ## Production loop and sourcing
@@ -37,8 +37,8 @@ domain is deferred until real usage provides enough evidence to justify it.
 
 - Produce, publish, and measure at least **20 controlled content experiments**.
 - Keep each published video traceable to its Session specification, source
-  Assets, audio RenderRun, video RenderRun, and a future Publication record.
-  Publication records are planned, not implemented today.
+  Assets, audio RenderRun, video RenderRun, and a Publication record preserving
+  the exact reviewed plan (including its thumbnail for v2 plans).
 - Capture sufficient performance data to compare genre, mood, purpose,
   environment, location, weather, time, and duration. Record each hypothesis and
   the dimensions being varied so the results can inform subsequent experiments.
@@ -57,7 +57,7 @@ rendering, video rendering, and artwork generation.
 
 ### Phase 2 — Publishable MVP
 
-**In progress.** YouTube Audio Library sourcing convention, PublicationPlan,
+**Engineering complete; operator canary next.** YouTube Audio Library sourcing convention, PublicationPlan,
 title/description/tags metadata, thumbnail packaging, manual YouTube upload, and
 Publication ↔ YouTube video ID tracking. Sourcing conventions and deterministic
 local PublicationPlan are available now. Run `swale-sounds publish plan` after
@@ -65,7 +65,10 @@ rendering, review the package, then manually upload the referenced MP4 through
 YouTube Studio. See the [publication workflow](../README.md#publication-planning).
 Planning does not upload anything. After manual upload, use `publish record`
 to preserve the exact verified plan and YouTube video ID, then `publish list`
-or `publish show` to inspect provenance. Thumbnail transformation remains next.
+or `publish show` to inspect provenance. New v2 packages include a verified
+1280×720 JPEG thumbnail derived from the existing artwork with recorded transform
+and FFmpeg provenance. Review and manually upload that thumbnail alongside the
+video. Original v1 Publication snapshots remain unchanged and inspectable.
 The local smoke test records a synthetic ID; the real 3–5-video canary (SWA-71)
 is a separate operator-led activity.
 

@@ -9,7 +9,7 @@ from swale_sounds.assets.files import calculate_sha256
 from swale_sounds.cli import app
 from swale_sounds.database import create_session_factory
 from swale_sounds.models import Asset, AssetKind, RenderRun, RenderStatus
-from swale_sounds.publishing.models import PublicationError, PublicationPlan
+from swale_sounds.publishing.models import PublicationError, parse_plan
 from swale_sounds.publishing.service import create_publication_plan
 from swale_sounds.rendering.service import render_audio
 from swale_sounds.rendering.video_service import render_video
@@ -39,7 +39,7 @@ def test_deterministic_plan_snapshot_and_no_production_mutation(
     }
     plan, path = create_publication_plan(engine, settings, session.public_id)
     content = path.read_bytes()
-    assert PublicationPlan.model_validate_json(content) == plan
+    assert parse_plan(content) == plan
     assert plan.session_id == session.public_id
     assert plan.audio_render_id == audio.public_id
     assert plan.video.render_id == video.public_id
@@ -64,7 +64,7 @@ def test_deterministic_plan_snapshot_and_no_production_mutation(
     assert path.read_bytes() == content and path.stat().st_mtime_ns == stamp
     assert production_state(engine) == before
     assert all(calculate_sha256(p) == digest for p, digest in files.items())
-    assert list(path.parent.iterdir()) == [path]
+    assert sorted(p.suffix for p in path.parent.iterdir()) == [".jpg", ".json"]
 
 
 @pytest.mark.parametrize(
@@ -206,7 +206,7 @@ def test_atomic_update_and_failed_replacement_preserves_plan(
         with pytest.raises(PublicationError, match="interrupted"):
             create_publication_plan(engine, settings, session.public_id)
     assert path.read_bytes() == before
-    assert list(path.parent.iterdir()) == [path]
+    assert sorted(p.suffix for p in path.parent.iterdir()) == [".jpg", ".json"]
     calls = []
 
     def checked_replace(source, destination):
@@ -302,7 +302,10 @@ def test_concurrent_plans_are_identical(publication_session):
         ]
         first, second = [future.result() for future in futures]
     assert first == second
-    assert list(first[1].parent.iterdir()) == [first[1]]
+    assert sorted(p.suffix for p in first[1].parent.iterdir()) == [
+        ".jpg",
+        ".json",
+    ]
 
 
 def test_package_ancestor_symlink_rejected(publication_session, tmp_path):

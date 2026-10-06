@@ -39,6 +39,7 @@ def plan_command(
                 f"Video: {plan.video.path} (Session workspace relative)"
             )
             typer.echo(f"Render: {plan.video.render_id}")
+            typer.echo(f"Thumbnail: {plan.thumbnail.path} (1280x720 JPEG)")
             typer.echo("Review locally; nothing has been uploaded.")
         except PublicationError as exc:
             typer.echo(str(exc), err=True)
