@@ -9,8 +9,8 @@ to zero.
 
 The MVP is a repeatable series of controlled publish/measure experiments, not
 full automation. Phase 1 local production is complete. Phase 2 now includes local
-publication planning; uploading, publication tracking, and analytics remain
-future work.
+publication planning and manual publication records; automatic uploading and
+analytics remain future work.
 
 ## Production loop and sourcing
 
@@ -63,8 +63,11 @@ Publication ↔ YouTube video ID tracking. Sourcing conventions and deterministi
 local PublicationPlan are available now. Run `swale-sounds publish plan` after
 rendering, review the package, then manually upload the referenced MP4 through
 YouTube Studio. See the [publication workflow](../README.md#publication-planning).
-The command does not upload anything or record a publication. Thumbnail
-transformation and Publication ↔ YouTube video ID tracking remain future work.
+Planning does not upload anything. After manual upload, use `publish record`
+to preserve the exact verified plan and YouTube video ID, then `publish list`
+or `publish show` to inspect provenance. Thumbnail transformation remains next.
+The local smoke test records a synthetic ID; the real 3–5-video canary (SWA-71)
+is a separate operator-led activity.
 
 ### Phase 3 — Measurement MVP
 

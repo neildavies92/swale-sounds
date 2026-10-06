@@ -93,6 +93,13 @@ def verify_result(root: Path, ffprobe: str) -> None:
             "SELECT output_path, output_sha256 FROM render_runs "
             "WHERE stage = 'video' AND status = 'succeeded'"
         ).fetchall()
+        publications = db.execute(
+            "SELECT p.external_id, p.canonical_url, p.plan_sha256, "
+            "p.plan_text, s.public_id, r.output_sha256 FROM publications p "
+            "JOIN sessions s ON s.id = p.session_id "
+            "JOIN render_runs r ON r.id = p.video_render_id "
+            "WHERE r.stage = 'video' AND r.status = 'succeeded'"
+        ).fetchall()
     if state != [(SESSION_ID, "video_rendered")] or len(rows) != 1:
         raise SmokeError(f"Unexpected final database state: {state}, {rows}")
     directory = root / "data" / "sessions" / SESSION_ID / "output" / "video"
@@ -114,6 +121,15 @@ def verify_result(root: Path, ffprobe: str) -> None:
     workspace = root / "data" / "sessions" / SESSION_ID
     manifest = workspace / "output/publish/youtube.json"
     plan = PublicationPlan.model_validate_json(manifest.read_bytes())
+    if len(publications) != 1 or publications[0] != (
+        "LocalTest01",
+        "https://www.youtube.com/watch?v=LocalTest01",
+        hashlib.sha256(manifest.read_bytes()).hexdigest(),
+        manifest.read_text(encoding="utf-8"),
+        SESSION_ID,
+        rows[0][1],
+    ):
+        raise SmokeError("Synthetic Publication does not match the exact plan")
     if (
         plan.session_id != SESSION_ID
         or workspace / plan.video.path != output
@@ -300,6 +316,19 @@ def main() -> int:
                     "publish",
                     "plan",
                     SESSION_ID,
+                    "--config",
+                    str(config),
+                ],
+            ),
+            (
+                "recording synthetic manual publication",
+                [
+                    str(cli),
+                    "publish",
+                    "record",
+                    SESSION_ID,
+                    "--video-id",
+                    "LocalTest01",
                     "--config",
                     str(config),
                 ],

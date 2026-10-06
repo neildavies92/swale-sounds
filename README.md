@@ -9,7 +9,8 @@ The project is moving into a publish/measure MVP: repeated, controlled YouTube
 content experiments with minimal music-generation cost. YouTube Audio Library
 is the default MVP music source, acquired manually by the operator. Original/AI
 music is deferred until audience demand is validated. Local publication planning
-is available; uploading, publication tracking, and analytics are future work.
+and manual publication tracking are available; automatic uploading and analytics
+are future work.
 
 See the **[MVP strategy, success criteria, and roadmap](docs/mvp.md)**.
 The existing production engine runs on a developer workstation or a conventional
@@ -172,8 +173,35 @@ Run migrations first as described above. The plan command also accepts
 `--config /path/to/settings.yaml`. Review the resulting
 `data/sessions/session-000001/output/publish/youtube.json`, then manually upload
 the referenced MP4 through YouTube Studio and review its title, description,
-and tags. **Planning never uploads anything.** Publication tracking and analytics
-are future work; a plan is publishing intent, not evidence of publication.
+and tags. **Planning never uploads anything.** A plan is publishing intent,
+not evidence of publication. After manually uploading the reviewed package,
+record the actual YouTube video ID:
+
+```bash
+uv run swale-sounds publish record session-000001 --video-id YOURVIDEOID \
+  --published-at 2026-10-06T12:00:00+01:00
+uv run swale-sounds publish list
+uv run swale-sounds publish show publication-ID
+```
+
+Replace `YOURVIDEOID` with the actual 11-character ID. All commands accept
+`--config`. Publication time defaults to now; explicit times must include a
+timezone and are stored as UTC. The canonical watch URL is derived from the ID.
+This is an operator attestation, not a YouTube verification or upload. Analytics
+remain future work. The smoke test uses a synthetic ID without contacting YouTube.
+
+Run `make migrate` for migration `0005`. Each Publication links its Session and
+successful video RenderRun and stores the exact canonical plan text, version,
+and SHA-256. Recording verifies the existing package and media against current
+intent; it never regenerates a plan. Missing, edited, stale, or damaged packages
+fail: repair and review against the actual upload before recording. Do not
+regenerate a different package and treat it as evidence of an earlier upload.
+An identical external ID/provenance returns the existing row and retains its
+original timestamp; conflicting provenance fails. Different external IDs may
+refer to the same content. History is append-only, with database protections
+against updates/deletes and foreign-key deletion. Downgrade refuses while any
+Publication exists. `show` includes the historical snapshot even after the
+current package changes; `list` gives identities, URL, time, and plan hash.
 
 Version 1 records the Session ID/specification hash, audio and video RenderRun
 IDs, video path/hash, source Asset paths/hashes/IDs, music provenance, metadata,

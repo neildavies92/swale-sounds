@@ -7,6 +7,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 from sqlalchemy import Engine, select
+from sqlalchemy.orm import Session as DatabaseSession
 
 from swale_sounds.assets.files import safe_child
 from swale_sounds.assets.probe import MediaProbeError
@@ -90,6 +91,93 @@ def write_package(workspace: Path, plan: PublicationPlan) -> Path:
             temporary.unlink(missing_ok=True)
 
 
+def derive_plan(
+    db: DatabaseSession, settings: AppConfig, session: Session
+) -> tuple[PublicationPlan, Path]:
+    """Verify current authoritative inputs without writing a package."""
+    public_id = session.public_id
+    current = current_video_intent(db, session, settings)
+    workspace = current.workspace
+    spec = verified_session_spec(session, settings.paths.data, workspace)
+    assets = [
+        *current.audio_intent.music,
+        *current.audio_intent.ambience,
+        current.artwork_asset,
+    ]
+    sources = [
+        SourceReference(
+            asset_id=asset.public_id,
+            path=verify_source(settings.paths.data, workspace, asset)
+            .relative_to(workspace)
+            .as_posix(),
+            sha256=asset.sha256,
+        )
+        for asset in assets
+    ]
+    run = db.scalar(
+        select(RenderRun)
+        .where(
+            RenderRun.session_id == session.id,
+            RenderRun.stage == RenderStage.VIDEO,
+            RenderRun.status == RenderStatus.SUCCEEDED,
+            RenderRun.renderer_version == VIDEO_RENDERER_VERSION,
+            RenderRun.input_fingerprint == current.fingerprint,
+        )
+        .order_by(RenderRun.id.desc())
+    )
+    if run is None:
+        raise PublicationError(
+            "No current successful video render. "
+            f"Run 'swale-sounds render video {public_id}'."
+        )
+    output = verified_render_output(settings.paths.data, workspace, run)
+    video, audio, duration = verify_video(
+        output,
+        current.settings,
+        current.audio_intent.settings,
+        current.duration,
+    )
+    if (
+        run.inputs_json != current.inputs
+        or run.configuration_json != current.configuration
+        or run.ffmpeg_version != current.ffmpeg_version
+        or run.output_size_bytes != output.stat().st_size
+        or run.width != video.width
+        or run.height != video.height
+        or run.codec_name != video.codec_name
+        or run.sample_rate != audio.sample_rate
+        or run.channels != audio.channels
+        or not isclose(run.duration_seconds or 0, duration)
+        or not isclose(
+            run.frame_rate or 0,
+            parse_frame_rate(video.avg_frame_rate),
+        )
+    ):
+        raise PublicationError(
+            "Recorded video metadata differs from current output. "
+            f"Run 'swale-sounds render video {public_id} --force'."
+        )
+    music = [music_provenance(asset) for asset in current.audio_intent.music]
+    plan = PublicationPlan(
+        session_id=session.public_id,
+        spec_sha256=session.spec_sha256,
+        audio_render_id=current.audio_run.public_id,
+        video=VideoReference(
+            render_id=run.public_id,
+            path=output.relative_to(workspace).as_posix(),
+            sha256=run.output_sha256 or "",
+        ),
+        source_assets=sources,
+        artwork=sources[-1],
+        title=title_for(spec),
+        description=description_for(spec, music),
+        tags=tags_for(spec),
+        content=spec,
+        music=music,
+    )
+    return plan, workspace
+
+
 def create_publication_plan(
     engine: Engine, settings: AppConfig, public_id: str
 ) -> tuple[PublicationPlan, Path]:
@@ -106,94 +194,7 @@ def create_publication_plan(
                     raise SessionNotFoundError(
                         f"Session not found: {public_id}"
                     )
-                current = current_video_intent(db, session, settings)
-                workspace = current.workspace
-                spec = verified_session_spec(
-                    session, settings.paths.data, workspace
-                )
-                assets = [
-                    *current.audio_intent.music,
-                    *current.audio_intent.ambience,
-                    current.artwork_asset,
-                ]
-                sources = [
-                    SourceReference(
-                        asset_id=asset.public_id,
-                        path=verify_source(
-                            settings.paths.data, workspace, asset
-                        )
-                        .relative_to(workspace)
-                        .as_posix(),
-                        sha256=asset.sha256,
-                    )
-                    for asset in assets
-                ]
-                run = db.scalar(
-                    select(RenderRun)
-                    .where(
-                        RenderRun.session_id == session.id,
-                        RenderRun.stage == RenderStage.VIDEO,
-                        RenderRun.status == RenderStatus.SUCCEEDED,
-                        RenderRun.renderer_version == VIDEO_RENDERER_VERSION,
-                        RenderRun.input_fingerprint == current.fingerprint,
-                    )
-                    .order_by(RenderRun.id.desc())
-                )
-                if run is None:
-                    raise PublicationError(
-                        "No current successful video render. "
-                        f"Run 'swale-sounds render video {public_id}'."
-                    )
-                output = verified_render_output(
-                    settings.paths.data, workspace, run
-                )
-                video, audio, duration = verify_video(
-                    output,
-                    current.settings,
-                    current.audio_intent.settings,
-                    current.duration,
-                )
-                if (
-                    run.inputs_json != current.inputs
-                    or run.configuration_json != current.configuration
-                    or run.ffmpeg_version != current.ffmpeg_version
-                    or run.output_size_bytes != output.stat().st_size
-                    or run.width != video.width
-                    or run.height != video.height
-                    or run.codec_name != video.codec_name
-                    or run.sample_rate != audio.sample_rate
-                    or run.channels != audio.channels
-                    or not isclose(run.duration_seconds or 0, duration)
-                    or not isclose(
-                        run.frame_rate or 0,
-                        parse_frame_rate(video.avg_frame_rate),
-                    )
-                ):
-                    raise PublicationError(
-                        "Recorded video metadata differs from current output. "
-                        f"Run 'swale-sounds render video {public_id} --force'."
-                    )
-                music = [
-                    music_provenance(asset)
-                    for asset in current.audio_intent.music
-                ]
-                plan = PublicationPlan(
-                    session_id=session.public_id,
-                    spec_sha256=session.spec_sha256,
-                    audio_render_id=current.audio_run.public_id,
-                    video=VideoReference(
-                        render_id=run.public_id,
-                        path=output.relative_to(workspace).as_posix(),
-                        sha256=run.output_sha256 or "",
-                    ),
-                    source_assets=sources,
-                    artwork=sources[-1],
-                    title=title_for(spec),
-                    description=description_for(spec, music),
-                    tags=tags_for(spec),
-                    content=spec,
-                    music=music,
-                )
+                plan, workspace = derive_plan(db, settings, session)
                 return plan, write_package(workspace, plan)
     except (AssetError, MediaProbeError, RenderError) as exc:
         raise PublicationError(
