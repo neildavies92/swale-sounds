@@ -2,7 +2,6 @@ import json
 from pathlib import Path
 
 import pytest
-import yaml
 from sqlalchemy import select
 from typer.testing import CliRunner
 
@@ -14,18 +13,6 @@ from swale_sounds.publishing.models import PublicationError, PublicationPlan
 from swale_sounds.publishing.service import create_publication_plan
 from swale_sounds.rendering.service import render_audio
 from swale_sounds.rendering.video_service import render_video
-
-
-@pytest.fixture
-def publication_session(render_session):
-    settings, engine, config, session = render_session
-    settings.media.video.width = 160
-    settings.media.video.height = 90
-    settings.media.video.fps = 10
-    config.write_text(yaml.safe_dump(settings.model_dump(mode="json")))
-    audio = render_audio(engine, settings, session.public_id).run
-    video = render_video(engine, settings, session.public_id).run
-    return settings, engine, config, session, audio, video
 
 
 def production_state(engine):

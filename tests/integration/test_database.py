@@ -50,6 +50,7 @@ def test_migration_creates_expected_schema_without_model_drift(database):
         "sessions",
         "assets",
         "render_runs",
+        "publications",
         "alembic_version",
     }
     with engine.connect() as connection:

@@ -4,6 +4,21 @@ import pytest
 import yaml
 
 
+@pytest.fixture
+def publication_session(render_session):
+    from swale_sounds.rendering.service import render_audio
+    from swale_sounds.rendering.video_service import render_video
+
+    settings, engine, config, session = render_session
+    settings.media.video.width = 160
+    settings.media.video.height = 90
+    settings.media.video.fps = 10
+    config.write_text(yaml.safe_dump(settings.model_dump(mode="json")))
+    audio = render_audio(engine, settings, session.public_id).run
+    video = render_video(engine, settings, session.public_id).run
+    return settings, engine, config, session, audio, video
+
+
 @pytest.fixture(autouse=True)
 def prohibit_live_image_requests(monkeypatch):
     """Paid provider calls are never part of the normal test suite."""
