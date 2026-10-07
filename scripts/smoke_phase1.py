@@ -13,7 +13,9 @@ from pathlib import Path
 
 import yaml
 
-from swale_sounds.publishing.models import PublicationPlan
+from swale_sounds.publishing.models import PublicationPlanV2, parse_plan
+from swale_sounds.publishing.thumbnail import verify_thumbnail
+from swale_sounds.rendering.ffmpeg import find_ffmpeg
 
 REPOSITORY = Path(__file__).resolve().parents[1]
 SESSION_ID = "session-000001"
@@ -120,7 +122,10 @@ def verify_result(root: Path, ffprobe: str) -> None:
             raise SmokeError("Final MP4 SHA-256 does not match its RenderRun")
     workspace = root / "data" / "sessions" / SESSION_ID
     manifest = workspace / "output/publish/youtube.json"
-    plan = PublicationPlan.model_validate_json(manifest.read_bytes())
+    plan = parse_plan(manifest.read_bytes())
+    if not isinstance(plan, PublicationPlanV2):
+        raise SmokeError("Expected a v2 plan with a thumbnail")
+    verify_thumbnail(workspace, plan.thumbnail, plan.artwork, find_ffmpeg()[1])
     if len(publications) != 1 or publications[0] != (
         "LocalTest01",
         "https://www.youtube.com/watch?v=LocalTest01",

@@ -17,10 +17,13 @@ from swale_sounds.models import Publication, RenderRun, Session
 from swale_sounds.models.session import utc_now
 from swale_sounds.publishing.models import (
     PublicationError,
-    PublicationPlan,
+    PublicationPlanV2,
+    parse_plan,
     plan_bytes,
+    plan_with_thumbnail,
 )
 from swale_sounds.publishing.service import derive_plan
+from swale_sounds.publishing.thumbnail import verify_derived_thumbnail
 from swale_sounds.rendering.ffmpeg import RenderError
 from swale_sounds.sessions.schema import sha256_bytes
 from swale_sounds.sessions.service import SessionNotFoundError
@@ -73,7 +76,7 @@ def record_publication(
                         "Publication plan is missing or not a regular file."
                     )
                 payload = path.read_bytes()
-                selected = PublicationPlan.model_validate_json(payload)
+                selected = parse_plan(payload)
                 digest = sha256_bytes(payload)
                 if (
                     selected.session_id != public_id
@@ -84,7 +87,18 @@ def record_publication(
                         "or belongs to another Session."
                     )
                 expected, _ = derive_plan(db, settings, session)
-                if sha256_bytes(plan_bytes(expected)) != digest:
+                if isinstance(selected, PublicationPlanV2):
+                    verify_derived_thumbnail(
+                        workspace,
+                        selected.thumbnail,
+                        expected.artwork,
+                    )
+                    expected_bytes = plan_bytes(
+                        plan_with_thumbnail(expected, selected.thumbnail)
+                    )
+                else:
+                    expected_bytes = plan_bytes(expected)
+                if sha256_bytes(expected_bytes) != digest:
                     raise PublicationError(
                         "Publication plan is stale or edited; "
                         "it differs from current verified intent."

@@ -172,8 +172,8 @@ uv run swale-sounds publish plan session-000001
 Run migrations first as described above. The plan command also accepts
 `--config /path/to/settings.yaml`. Review the resulting
 `data/sessions/session-000001/output/publish/youtube.json`, then manually upload
-the referenced MP4 through YouTube Studio and review its title, description,
-and tags. **Planning never uploads anything.** A plan is publishing intent,
+the referenced MP4 and thumbnail through YouTube Studio and review its title,
+description, and tags. **Planning never uploads anything.** A plan is publishing intent,
 not evidence of publication. After manually uploading the reviewed package,
 record the actual YouTube video ID:
 
@@ -203,14 +203,45 @@ against updates/deletes and foreign-key deletion. Downgrade refuses while any
 Publication exists. `show` includes the historical snapshot even after the
 current package changes; `list` gives identities, URL, time, and plan hash.
 
-Version 1 records the Session ID/specification hash, audio and video RenderRun
+Both plan versions record the Session ID/specification hash, audio and video RenderRun
 IDs, video path/hash, source Asset paths/hashes/IDs, music provenance, metadata,
 and the complete normalized Session specification for future correlation.
 All media paths are relative to the **Session workspace**, identified by
 `path_base: "session_workspace"`, not to `output/publish/`. The MP4 stays in its
 authoritative render location; no large copy or media symlink is created.
-The artwork reference is source artwork, **not a validated YouTube thumbnail**.
-Playlist intents are empty. No database rows or statuses are changed.
+The artwork reference remains the unmodified source. New **v2** plans additionally
+include a typed `thumbnail` reference to a verified JPEG with its source Asset
+ID/hash, size, dimensions, format, transform settings/version, FFmpeg version,
+fingerprint, and output SHA-256. Playlist intents are empty. Planning changes no
+database rows or statuses.
+
+Thumbnail transform v1 uses FFmpeg to scale to cover 1280×720 with Lanczos
+resampling, centre-crop overflow, set square pixels, and encode one JPEG frame
+using `mjpeg`, `yuvj420p`, quality 2, one encoder thread, and bitexact flags.
+Source metadata and chapters are stripped. The source artwork is verified and
+never modified. Output must be exactly 1280×720 and **less than 2,000,000 bytes**;
+oversized images fail rather than silently changing quality. This conservative
+limit fits both mobile and desktop upload limits in
+[YouTube's thumbnail guidance](https://support.google.com/youtube/answer/72431).
+
+Artifacts use `output/publish/thumbnail-<intent-fingerprint>-<image-sha256>.jpg`.
+The fingerprint includes source identity/hash, every transform setting, transform
+version, and the actual FFmpeg version. Intact matching thumbnails are reused
+without encoding or rewriting. Missing artifacts can be regenerated; damaged
+or unrelated existing files and symlinks are rejected. Restore recorded bytes
+or move a damaged file aside before retrying. Changed intent or bytes use a new
+path, preserving historical references. Files are linked into place atomically
+without replacement; temporary files are cleaned up and generation diagnostics
+remain under Session `logs/thumbnail-*.log`. A failed manifest write may leave
+an intact unreferenced artifact, which a retry can safely reuse.
+
+Existing canonical **v1** packages remain recognized and recordable after current
+media/intent verification. An explicit `publish plan` upgrades a recognized v1
+package to v2. Existing Publication snapshots are never upgraded or rewritten.
+Recording a v2 plan verifies its thumbnail hash/media and re-derives the fixed
+transform in a disposable directory to reject forged hash references. This
+verification does not regenerate or alter the reviewed package. No dependency,
+configuration, or database schema change is needed for thumbnails.
 
 Planning shares video fingerprint resolution with rendering and checks canonical
 specification integrity, current audio/configuration, source hashes, video hash,
